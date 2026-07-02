@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "node",
+    "target": "esnext",
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "lib": [
+      "esnext",
+      "es2021.intl"
+    ],
+    "skipLibCheck": true,
+    "typeRoots": [
+      "../node_modules/@dynatrace/js-runtime/types",
+      "../node_modules/@types"
+    ],
+    "types": [
+      "node",
+      "runtime",
+      "jest"
+    ]
+  }
+}

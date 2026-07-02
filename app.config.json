@@ -1,0 +1,60 @@
+{
+  "$schema": "./.dt-app/app.config.schema.json",
+  "environmentUrl": "https://qmh1718h.sprint.apps.dynatracelabs.com/",
+  "app": {
+    "name": "Business Metrics Discovery",
+    "version": "0.0.219",
+    "description": "A starting project with routing, fetching data, and charting",
+    "id": "my.dt.discover.business.metrics",
+    "scopes": [
+      {
+        "name": "storage:logs:read",
+        "comment": "default template"
+      },
+      {
+        "name": "storage:buckets:read",
+        "comment": "default template"
+      },
+      {
+        "name": "storage:metrics:read",
+        "comment": "read dt.service.request.count and other service metrics for OneAgent service listing"
+      },
+      {
+        "name": "storage:spans:read",
+        "comment": "read distributed trace spans for OpenTelemetry method discovery"
+      },
+      {
+        "name": "storage:entities:read",
+        "comment": "resolve service entity names from IDs"
+      },
+      {
+        "name": "storage:bizevents:read",
+        "comment": "read captured business events for live parameter discovery"
+      },
+      {
+        "name": "settings:objects:write",
+        "comment": "create business event capture rules"
+      },
+      {
+        "name": "settings:objects:read",
+        "comment": "read existing business event capture rules"
+      },
+      {
+        "name": "settings:schemas:read",
+        "comment": "discover available settings schemas at runtime"
+      },
+      {
+        "name": "document:documents:write",
+        "comment": "create dashboards directly on the tenant from the Journey Wizard"
+      },
+      {
+        "name": "document:documents:read",
+        "comment": "verify created dashboard documents"
+      },
+      {
+        "name": "ReadConfig",
+        "comment": "read v1 Config API for request attributes list"
+      }
+    ]
+  }
+}
