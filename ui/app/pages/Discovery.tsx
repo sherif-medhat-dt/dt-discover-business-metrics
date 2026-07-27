@@ -5921,32 +5921,34 @@ function InvestigateMethodsSheet({
     return buildWaterfallRows(records, { allowSql: allowSqlMethods });
   }, [data, allowSqlMethods]);
 
-  // Locate the endpoint root span — the topmost span in this trace whose
-  // `endpoint.name` matches our route AND has kind=server. That's the
-  // entry point for *this* endpoint. Subsequent server spans on the trace
-  // belong to downstream services and are filtered out of the default view.
+  // Locate the endpoint root span for this endpoint inside the trace.
+  // The outer request (e.g. AspNet.WebRequest) also carries endpoint.name
+  // because OneAgent tags the whole request chain — so we must NOT just
+  // take the first (shallowest) server span. We pick the DEEPEST server
+  // span whose endpoint.name matches, which is always the actual service
+  // handler rather than the outer proxy. BFS from that span produces a
+  // tight subtree that excludes parallel siblings like BookingService calls
+  // that happen to live in the same trace but were not invoked from this endpoint.
   const endpointRootId = useMemo<string | null>(() => {
     if (rows.length === 0) return null;
     const normRoute = route.trim().toLowerCase();
     const matchesRoute = (n: WaterfallNode) =>
       !!n.endpointName && n.endpointName.trim().toLowerCase() === normRoute;
-    // Best: server span on this exact endpoint from the target service.
-    const serviceServerHit = rows.find(
-      (r) => matchesRoute(r) && (r.spanKind ?? "") === "server" && r.serviceId === serviceId,
-    );
-    if (serviceServerHit) return serviceServerHit.spanId;
-    // Fallback: any server span on this exact endpoint (could be an outer proxy span).
-    const serverHit = rows.find(
+    // Pick the deepest server span whose endpoint.name matches this route.
+    // Deepest = actual service handler; shallowest = outer proxy/ASP.NET entry.
+    const serverSpans = rows.filter(
       (r) => matchesRoute(r) && (r.spanKind ?? "") === "server",
     );
-    if (serverHit) return serverHit.spanId;
+    if (serverSpans.length > 0) {
+      return serverSpans.reduce((a, b) => (b.depth > a.depth ? b : a)).spanId;
+    }
     // Any span tagged with our endpoint.name.
     const anyHit = rows.find(matchesRoute);
     if (anyHit) return anyHit.spanId;
     // Last resort: the first server-kind span (could be the trace root).
     const anyServer = rows.find((r) => (r.spanKind ?? "") === "server");
     return anyServer?.spanId ?? rows[0].spanId;
-  }, [rows, route, serviceId]);
+  }, [rows, route]);
 
   // BFS from endpointRoot down through children — produces the set of span
   // ids that belong to "this endpoint's slice of the trace".
