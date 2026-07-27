@@ -3,7 +3,7 @@
   "environmentUrl": "https://qmh1718h.sprint.apps.dynatracelabs.com/",
   "app": {
     "name": "Business Metrics Discovery",
-    "version": "0.0.224",
+    "version": "0.0.225",
     "description": "A starting project with routing, fetching data, and charting",
     "id": "my.dt.discover.business.metrics",
     "scopes": [

@@ -1146,7 +1146,7 @@ function buildTraceSamplesQuery(serviceId: string, route: string): string {
 | sort timestamp desc
 | dedup trace.id
 | limit 5
-| fields trace_id = trace.id, ts = timestamp`;
+| fields trace_id = trace.id, span_id = span.id, ts = timestamp`;
 }
 
 // ─── Data Parsers ─────────────────────────────────────────────────────────────
@@ -5865,25 +5865,35 @@ function InvestigateMethodsSheet({
   const { data: samplesData, isLoading: samplesLoading } = useDql({
     query: samplesQuery,
   });
-  const sampleTraceIds = useMemo<string[]>(() => {
+  // traceEntrySpans maps traceId → the server-entry span ID for this endpoint.
+  // Since buildTraceSamplesQuery filters to span.kind==server on the target
+  // service+route, this span ID is the exact waterfall anchor — no need to
+  // guess via endpoint.name matching afterwards.
+  const { sampleTraceIds, traceEntrySpans } = useMemo<{
+    sampleTraceIds: string[];
+    traceEntrySpans: Map<string, string>;
+  }>(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const records = (samplesData as { records?: Array<Record<string, any>> } | undefined)?.records;
-    if (!records) return [];
     const ids: string[] = [];
     const seen = new Set<string>();
-    for (const r of records) {
-      const id = spanIdToHex(r.trace_id ?? r["trace.id"]);
-      if (id && !seen.has(id)) {
-        seen.add(id);
-        ids.push(id);
+    const entryMap = new Map<string, string>();
+    if (records) {
+      for (const r of records) {
+        const traceId = spanIdToHex(r.trace_id ?? r["trace.id"]);
+        const spanId = spanIdToHex(r.span_id ?? r["span.id"]);
+        if (traceId && !seen.has(traceId)) {
+          seen.add(traceId);
+          ids.push(traceId);
+          if (spanId) entryMap.set(traceId, spanId);
+        }
       }
     }
-    // Make sure the candidate-derived fallback is selectable too, in case
-    // the samples query missed it (different recency window or filter).
+    // Make sure the candidate-derived fallback is selectable too.
     if (fallbackTraceId && !seen.has(fallbackTraceId)) {
       ids.push(fallbackTraceId);
     }
-    return ids.slice(0, 5);
+    return { sampleTraceIds: ids.slice(0, 5), traceEntrySpans: entryMap };
   }, [samplesData, fallbackTraceId]);
 
   // Currently displayed trace index within sampleTraceIds (or -1 when we
@@ -5922,33 +5932,35 @@ function InvestigateMethodsSheet({
   }, [data, allowSqlMethods]);
 
   // Locate the endpoint root span for this endpoint inside the trace.
-  // The outer request (e.g. AspNet.WebRequest) also carries endpoint.name
-  // because OneAgent tags the whole request chain — so we must NOT just
-  // take the first (shallowest) server span. We pick the DEEPEST server
-  // span whose endpoint.name matches, which is always the actual service
-  // handler rather than the outer proxy. BFS from that span produces a
-  // tight subtree that excludes parallel siblings like BookingService calls
-  // that happen to live in the same trace but were not invoked from this endpoint.
+  // Primary: use the span_id returned by buildTraceSamplesQuery — that query
+  // filters to span.kind==server on the exact service+route so the span ID it
+  // returns IS the correct entry point, regardless of how many outer spans also
+  // carry endpoint.name (e.g. IIS.Web request, AspNet.WebRequest).
+  // Fallback: deepest server span whose endpoint.name matches (better than
+  // first/shallowest which picks the outer proxy).
   const endpointRootId = useMemo<string | null>(() => {
     if (rows.length === 0) return null;
+    // Best: the known entry span ID for this specific trace from the samples query.
+    const knownEntryId = traceId ? traceEntrySpans.get(traceId) : undefined;
+    if (knownEntryId && rows.some((r) => r.spanId === knownEntryId)) {
+      return knownEntryId;
+    }
+    // Fallback: deepest server span whose endpoint.name matches this route.
     const normRoute = route.trim().toLowerCase();
     const matchesRoute = (n: WaterfallNode) =>
       !!n.endpointName && n.endpointName.trim().toLowerCase() === normRoute;
-    // Pick the deepest server span whose endpoint.name matches this route.
-    // Deepest = actual service handler; shallowest = outer proxy/ASP.NET entry.
     const serverSpans = rows.filter(
       (r) => matchesRoute(r) && (r.spanKind ?? "") === "server",
     );
     if (serverSpans.length > 0) {
       return serverSpans.reduce((a, b) => (b.depth > a.depth ? b : a)).spanId;
     }
-    // Any span tagged with our endpoint.name.
     const anyHit = rows.find(matchesRoute);
     if (anyHit) return anyHit.spanId;
-    // Last resort: the first server-kind span (could be the trace root).
+    // Last resort: first server-kind span.
     const anyServer = rows.find((r) => (r.spanKind ?? "") === "server");
     return anyServer?.spanId ?? rows[0].spanId;
-  }, [rows, route]);
+  }, [rows, traceId, traceEntrySpans, route]);
 
   // BFS from endpointRoot down through children — produces the set of span
   // ids that belong to "this endpoint's slice of the trace".
