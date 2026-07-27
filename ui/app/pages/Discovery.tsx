@@ -1339,8 +1339,9 @@ function groupMethodCandidates(
       r.span_name,
       opts,
     );
+    const shortClass = r.class_name?.split(".").pop();
     const displayName = r.method_name
-      ? `${r.class_name?.split(".").pop() ?? "?"}.${r.method_name}()`
+      ? shortClass ? `${shortClass}.${r.method_name}()` : `${r.method_name}()`
       : r.span_name;
     const isCrossService = Boolean(
       r.service_id && owners && owners.size > 0 && !owners.has(r.service_id),
@@ -1550,8 +1551,9 @@ function groupGlobalMethodCandidates(
       r.span_name,
       opts,
     );
+    const shortClass = r.class_name?.split(".").pop();
     const displayName = r.method_name
-      ? `${r.class_name?.split(".").pop() ?? "?"}.${r.method_name}()`
+      ? shortClass ? `${shortClass}.${r.method_name}()` : `${r.method_name}()`
       : r.span_name;
     const isCrossService = Boolean(
       r.service_id && r.endpoint_service_id && r.service_id !== r.endpoint_service_id,
@@ -1647,6 +1649,7 @@ interface WaterfallNode {
   startTimeNs: number;
   statusCode: number | null;
   business: { score: number; keywords: string[]; categories: string[] };
+  serviceId: string | null;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1682,6 +1685,7 @@ function normalizeWaterfallSpan(
     startTimeNs: start,
     statusCode: statusNum,
     business: score,
+    serviceId: r["dt.smartscape.service"] ? String(r["dt.smartscape.service"]) : null,
   };
 }
 
@@ -5692,16 +5696,23 @@ function kindBadge(kind: string | null): { label: string; color: string } {
 function WaterfallRow({
   node,
   selected,
+  hasChildren,
+  collapsed,
+  onToggleCollapse,
   onClick,
 }: {
   node: WaterfallNode;
   selected: boolean;
+  hasChildren: boolean;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
   onClick: () => void;
 }) {
   const badge = kindBadge(node.spanKind);
   const indentPx = node.depth * 22;
+  const shortClass = node.className?.split(".").pop();
   const label = node.methodName
-    ? `${node.className?.split(".").pop() ?? "?"}.${node.methodName}`
+    ? shortClass ? `${shortClass}.${node.methodName}` : node.methodName
     : node.spanName;
 
   return (
@@ -5720,16 +5731,45 @@ function WaterfallRow({
         transition: "background 80ms linear",
       }}
     >
-      <div style={{ width: indentPx, flexShrink: 0 }} />
-      <div
-        style={{
-          width: 6,
-          height: 24,
-          background: badge.color,
-          borderRadius: 2,
-          flexShrink: 0,
-        }}
-      />
+      <Flex alignItems="center" style={{ width: indentPx + 20, flexShrink: 0, gap: 2 }}>
+        <div style={{ width: Math.max(0, indentPx - (hasChildren ? 4 : 0)), flexShrink: 0 }} />
+        {hasChildren ? (
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggleCollapse(); }}
+            title={collapsed ? "Expand children" : "Collapse children"}
+            style={{
+              width: 18,
+              height: 18,
+              border: `1px solid ${Colors.Border.Neutral.Default}`,
+              borderRadius: 3,
+              background: Colors.Background.Container.Neutral.Default,
+              color: Colors.Text.Neutral.Default,
+              fontSize: "13px",
+              fontWeight: 700,
+              cursor: "pointer",
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 0,
+              fontFamily: "monospace",
+            }}
+          >
+            {collapsed ? "+" : "−"}
+          </button>
+        ) : (
+          <div style={{ width: 18, flexShrink: 0 }} />
+        )}
+        <div
+          style={{
+            width: 6,
+            height: 24,
+            background: badge.color,
+            borderRadius: 2,
+            flexShrink: 0,
+          }}
+        />
+      </Flex>
       <Flex flexDirection="column" gap={2} style={{ flex: 1, minWidth: 0 }}>
         <Flex gap={8} alignItems="center" flexWrap="wrap">
           <Text
@@ -5887,7 +5927,12 @@ function InvestigateMethodsSheet({
     const normRoute = route.trim().toLowerCase();
     const matchesRoute = (n: WaterfallNode) =>
       !!n.endpointName && n.endpointName.trim().toLowerCase() === normRoute;
-    // Strongest match: server span on this exact endpoint.
+    // Best: server span on this exact endpoint from the target service.
+    const serviceServerHit = rows.find(
+      (r) => matchesRoute(r) && (r.spanKind ?? "") === "server" && r.serviceId === serviceId,
+    );
+    if (serviceServerHit) return serviceServerHit.spanId;
+    // Fallback: any server span on this exact endpoint (could be an outer proxy span).
     const serverHit = rows.find(
       (r) => matchesRoute(r) && (r.spanKind ?? "") === "server",
     );
@@ -5898,7 +5943,7 @@ function InvestigateMethodsSheet({
     // Last resort: the first server-kind span (could be the trace root).
     const anyServer = rows.find((r) => (r.spanKind ?? "") === "server");
     return anyServer?.spanId ?? rows[0].spanId;
-  }, [rows, route]);
+  }, [rows, route, serviceId]);
 
   // BFS from endpointRoot down through children — produces the set of span
   // ids that belong to "this endpoint's slice of the trace".
@@ -5951,6 +5996,30 @@ function InvestigateMethodsSheet({
     [visibleRows],
   );
 
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+
+  const spanIdsWithChildren = useMemo<Set<string>>(() => {
+    const s = new Set<string>();
+    for (const r of visibleRows) {
+      if (r.parentId) s.add(r.parentId);
+    }
+    return s;
+  }, [visibleRows]);
+
+  const displayedRows = useMemo<WaterfallNode[]>(() => {
+    if (collapsedIds.size === 0) return visibleRows;
+    const hiddenIds = new Set<string>();
+    for (const r of visibleRows) {
+      if (
+        (r.parentId && hiddenIds.has(r.parentId)) ||
+        (r.parentId && collapsedIds.has(r.parentId))
+      ) {
+        hiddenIds.add(r.spanId);
+      }
+    }
+    return visibleRows.filter((r) => !hiddenIds.has(r.spanId));
+  }, [visibleRows, collapsedIds]);
+
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Auto-select the endpoint root (or first business-relevant span in the
   // visible slice) whenever the data lands or the toggle flips.
@@ -5971,8 +6040,12 @@ function InvestigateMethodsSheet({
     if (!show) {
       setSelectedId(null);
       setShowFullTrace(false);
+      setCollapsedIds(new Set());
     }
   }, [show]);
+
+  // Reset collapse state when the trace changes.
+  useEffect(() => { setCollapsedIds(new Set()); }, [traceId]);
 
   const selectedNode = visibleRows.find((r) => r.spanId === selectedId) ?? null;
 
@@ -6173,11 +6246,21 @@ function InvestigateMethodsSheet({
                 </Text>
               </Flex>
               <Flex padding={8} flexDirection="column" gap={2}>
-                {visibleRows.map((node) => (
+                {displayedRows.map((node) => (
                   <WaterfallRow
                     key={node.spanId}
                     node={node}
                     selected={node.spanId === selectedId}
+                    hasChildren={spanIdsWithChildren.has(node.spanId)}
+                    collapsed={collapsedIds.has(node.spanId)}
+                    onToggleCollapse={() => {
+                      setCollapsedIds((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(node.spanId)) next.delete(node.spanId);
+                        else next.add(node.spanId);
+                        return next;
+                      });
+                    }}
                     onClick={() => setSelectedId(node.spanId)}
                   />
                 ))}
