@@ -1685,7 +1685,7 @@ function normalizeWaterfallSpan(
     startTimeNs: start,
     statusCode: statusNum,
     business: score,
-    serviceId: r["dt.smartscape.service"] ? String(r["dt.smartscape.service"]) : null,
+    serviceId: spanIdToHex(r["dt.smartscape.service"]) ?? spanIdToHex(r["dt.entity.service"]),
   };
 }
 
@@ -5720,56 +5720,59 @@ function WaterfallRow({
       onClick={onClick}
       alignItems="center"
       gap={8}
-      padding={8}
       style={{
         cursor: "pointer",
+        paddingTop: 5,
+        paddingBottom: 5,
+        paddingRight: 8,
+        paddingLeft: 8 + indentPx,
         background: selected
           ? Colors.Background.Container.Primary.Accent
           : "transparent",
         borderLeft: `3px solid ${selected ? badge.color : "transparent"}`,
         borderRadius: 4,
         transition: "background 80ms linear",
+        minHeight: 34,
       }}
     >
-      <Flex alignItems="center" style={{ width: indentPx + 20, flexShrink: 0, gap: 2 }}>
-        <div style={{ width: Math.max(0, indentPx - (hasChildren ? 4 : 0)), flexShrink: 0 }} />
-        {hasChildren ? (
-          <button
-            onClick={(e) => { e.stopPropagation(); onToggleCollapse(); }}
-            title={collapsed ? "Expand children" : "Collapse children"}
-            style={{
-              width: 18,
-              height: 18,
-              border: `1px solid ${Colors.Border.Neutral.Default}`,
-              borderRadius: 3,
-              background: Colors.Background.Container.Neutral.Default,
-              color: Colors.Text.Neutral.Default,
-              fontSize: "13px",
-              fontWeight: 700,
-              cursor: "pointer",
-              flexShrink: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: 0,
-              fontFamily: "monospace",
-            }}
-          >
-            {collapsed ? "+" : "−"}
-          </button>
-        ) : (
-          <div style={{ width: 18, flexShrink: 0 }} />
-        )}
-        <div
+      {/* Collapse toggle — fixed 18 px regardless of depth */}
+      {hasChildren ? (
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleCollapse(); }}
+          title={collapsed ? "Expand" : "Collapse"}
           style={{
-            width: 6,
-            height: 24,
-            background: badge.color,
-            borderRadius: 2,
+            width: 16,
+            height: 16,
             flexShrink: 0,
+            border: `1px solid ${Colors.Border.Neutral.Default}`,
+            borderRadius: 3,
+            background: "transparent",
+            color: Colors.Text.Neutral.Default,
+            fontSize: "11px",
+            fontWeight: 700,
+            lineHeight: 1,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 0,
           }}
-        />
-      </Flex>
+        >
+          {collapsed ? "+" : "−"}
+        </button>
+      ) : (
+        <div style={{ width: 16, flexShrink: 0 }} />
+      )}
+      {/* Kind colour bar */}
+      <div
+        style={{
+          width: 4,
+          height: 22,
+          background: badge.color,
+          borderRadius: 2,
+          flexShrink: 0,
+        }}
+      />
       <Flex flexDirection="column" gap={2} style={{ flex: 1, minWidth: 0 }}>
         <Flex gap={8} alignItems="center" flexWrap="wrap">
           <Text
