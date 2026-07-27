@@ -132,7 +132,7 @@ type UserSettings = {
 };
 const DEFAULT_USER_SETTINGS: UserSettings = {
   allowSqlMethods: false,
-  includeCrossServiceDescendants: false,
+  includeCrossServiceDescendants: true,
   keywordCategories: DEFAULT_KEYWORD_CATEGORIES,
   nonBusinessPhrases: DEFAULT_NON_BUSINESS_PHRASES,
   getByIdBoost: true,

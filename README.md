@@ -239,7 +239,7 @@ Disable this if the pattern generates too much noise in your environment.
 
 ### Include cross-service descendants
 
-When enabled in the **Collect Parameters** sheet, the span waterfall shows method spans from *downstream* services (e.g. a `BookingService.createBooking()` call that ran inside a separate `business-backend` service because the entry-point endpoint delegated to it via HTTP). Disabled by default.
+When enabled in the **Collect Parameters** sheet, the span waterfall shows method spans from *downstream* services (e.g. a `BookingService.createBooking()` call that ran inside a separate `business-backend` service because the entry-point endpoint delegated to it via HTTP). Enabled by default.
 
 ### Allow SQL/DB methods
 
