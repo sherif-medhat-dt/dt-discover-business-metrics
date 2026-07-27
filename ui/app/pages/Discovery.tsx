@@ -482,6 +482,15 @@ function scoreMethodLike(
     /Client(?=$|[^a-zA-Z])/.test(mn) ||
     /Client(?=$|[^a-zA-Z])/.test(sn);
 
+  // Exclude span_name from keyword scoring when it looks like an HTTP route
+  // (e.g. "GET /api/cart"). OTel framework spans often carry the endpoint URL
+  // as span.name — scoring it would match business keywords from the URL (like
+  // "cart"), not from the span's own code logic, producing false positives like
+  // Span() or requestListener() scoring as business candidates.
+  const spanIsHttpRoute = /^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+\//i.test(sn)
+    || /^\/[a-zA-Z0-9_\-/{}:%?=&]+$/.test(sn);
+  const scoreInput = spanIsHttpRoute ? `${cn} ${mn}` : `${cn} ${mn} ${sn}`;
+
   let score: number;
   let keywords: string[];
   let categories: string[];
@@ -490,7 +499,7 @@ function scoreMethodLike(
     keywords = [];
     categories = [];
   } else {
-    const scored = scoreText([cn, mn, sn].join(" "));
+    const scored = scoreText(scoreInput);
     score = scored.score;
     keywords = scored.keywords;
     categories = scored.categories;
@@ -8400,6 +8409,11 @@ function GlobalMethodsView({
                   {c.class_name}
                 </Text>
               )}
+              {rowData.appearances.length > 1 && (
+                <Text style={{ color: Colors.Text.Neutral.Default, fontSize: "11px" }}>
+                  seen in {rowData.appearances.length} endpoints
+                </Text>
+              )}
             </Flex>
           );
         },
@@ -8492,10 +8506,8 @@ function GlobalMethodsView({
         cell: ({ rowData }: { value: number; rowData: GlobalMethodRow }) => (
           <Flex flexDirection="column" gap={4} padding={4}>
             <RelevanceBadge score={rowData.candidate.score} />
-            {rowData.appearances.length > 1 && (
-              <Text style={{ color: Colors.Text.Neutral.Default, fontSize: "11px" }}>
-                in {rowData.appearances.length} endpoints
-              </Text>
+            {rowData.candidate.keywords.length > 0 && (
+              <KeywordChips keywords={rowData.candidate.keywords} />
             )}
           </Flex>
         ),
