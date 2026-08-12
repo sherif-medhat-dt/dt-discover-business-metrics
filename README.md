@@ -312,6 +312,7 @@ Edit `app.config.json` and set `environmentUrl` to your Dynatrace environment:
 
 ```bash
 # Deploy to the environment configured in app.config.json
+npm install
 npm run deploy
 ```
 
