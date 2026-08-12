@@ -297,7 +297,7 @@ Edit `app.config.json` and set `environmentUrl` to your Dynatrace environment:
 
 ```json
 {
-  "environmentUrl": "https://<your-environment-id>.live.dynatrace.com/",
+  "environmentUrl": "https://<your-environment-id>.apps.dynatrace.com/",
   "app": {
     "id": "my.dt.discover.business.metrics",
     ...
@@ -305,7 +305,7 @@ Edit `app.config.json` and set `environmentUrl` to your Dynatrace environment:
 }
 ```
 
-> For SaaS environments the URL is `https://<env-id>.live.dynatrace.com/`.  
+> For SaaS environments the URL is `https://<env-id>.apps.dynatrace.com/`.  
 
 
 ### 2. Build and deploy
