@@ -46,7 +46,8 @@ export default async function (params?: { fromTime?: string }): Promise<RequestA
           `fetch spans, from:${fromTime}`,
           "| limit 10000",
         ].join("\n"),
-        requestTimeoutMilliseconds: 30000,
+        requestTimeoutMilliseconds: 60000,
+        maxResultRecords: 10000,
       },
     });
 
