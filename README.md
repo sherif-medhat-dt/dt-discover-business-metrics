@@ -10,6 +10,7 @@ A Dynatrace App that helps you find and instrument business-relevant data alread
 - [Pages](#pages)
   - [Discover](#discover)
   - [Open Sessions](#open-sessions)
+  - [Request Attributes Tab](#request-attributes-tab)
   - [Journey Dashboard Wizard](#journey-dashboard-wizard)
 - [Business Events](#business-events)
 - [Request Attributes](#request-attributes)
@@ -112,6 +113,59 @@ A field-level view showing every named parameter across all app-created rules, w
 | Service | Owning service |
 | Sample value | Live value from the last 24 h of `fetch bizevents` |
 | Notebook | One-click button to create a Grail notebook scoped to that field |
+
+---
+
+### Request Attributes Tab
+
+The **Request Attributes** page discovers Dynatrace Request Attributes that are actively capturing data by scanning distributed trace spans. Unlike the Dynatrace Settings UI — which shows all *configured* attributes regardless of traffic — this page shows only attributes that have actually appeared in spans during the selected time interval.
+
+#### How it works
+
+The page calls the `getRequestAttributes` backend function, which scans up to 10,000 spans from the selected interval using DQL (`fetch spans | limit 10000`). It iterates every field on every span looking for keys prefixed with `request_attribute.*` or `dt.request_attribute.*`. Each matching key is aggregated across all spans, collecting:
+
+- **Occurrence count** — how many times the attribute was captured.
+- **Up to 5 sample values** — the raw captured values, along with the trace ID and span name for each.
+- **Inferred data type** — `STRING`, `DOUBLE`, or `BOOLEAN` based on the sample values.
+
+> **Why no sort?** Scanning without `sort timestamp desc` ensures the 10,000-span window is distributed broadly across the interval rather than just the most recent spans. This makes the scan more likely to find infrequently captured attributes.
+
+#### Interval selector
+
+A dropdown in the top-right controls how far back to scan:
+
+| Option | DQL expression |
+|--------|---------------|
+| Last 1 Hour *(default)* | `now()-1h` |
+| Last 6 Hours | `now()-6h` |
+| Last 1 Day | `now()-1d` |
+| Last 3 Days | `now()-3d` |
+
+Changing the interval triggers an automatic re-fetch. A **Refresh** button is also available.
+
+#### Results table
+
+| Column | Description |
+|--------|-------------|
+| Attribute Name | The request attribute name, with its inferred data type as a chip |
+| Captures | Total number of spans in the interval that carried this attribute |
+| Recent Values | Up to 3 distinct captured values, shown as monospace chips |
+| View Traces | Opens a modal with up to 5 sample traces |
+
+#### View Traces modal
+
+Clicking **View Traces** for an attribute opens a modal that lists the sample spans where the attribute was captured. Each entry shows:
+
+- The captured **value** (monospace chip).
+- The **span/endpoint name** where it was found.
+- The **timestamp** of the span.
+- A **clickable trace ID** that deep-links into Dynatrace Distributed Tracing for full end-to-end trace inspection.
+
+#### Limitations
+
+- Only attributes with traffic in the selected interval appear. Configured-but-idle attributes are invisible.
+- The scan is capped at 10,000 spans per query. For high-volume environments, infrequent attributes may not appear — widen the interval to increase coverage.
+- The `getRequestAttributes` function cannot call the Dynatrace Config v1 API (which lists all configured attributes) because App Functions run in an AppEngine sandbox that does not expose the tenant's `live.dynatrace.com` API. The spans-based approach is the only viable discovery mechanism.
 
 ---
 

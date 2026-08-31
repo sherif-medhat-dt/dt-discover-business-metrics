@@ -13,6 +13,9 @@ export const Header = () => {
         <AppHeader.NavItem as={Link} to="/sessions">
           Discovery Sessions
         </AppHeader.NavItem>
+        <AppHeader.NavItem as={Link} to="/request-attributes">
+          Request Attributes
+        </AppHeader.NavItem>
         <AppHeader.NavItem as={Link} to="/wizard">
           Journey Dashboard Wizard
         </AppHeader.NavItem>

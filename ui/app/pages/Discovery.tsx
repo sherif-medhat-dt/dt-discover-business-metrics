@@ -1195,7 +1195,7 @@ function parseServices(data: any): ServiceRecord[] {
         entity_id: r.entity_id ? String(r.entity_id) : null,
         service_name: String(r.service_name ?? ""),
         total_spans: toNum(r.total_spans),
-        http_endpoints: toNum(r.http_endpoints),
+        http_endpoints: routes.length,
         method_spans: toNum(r.method_spans),
         technology: r.technology ? String(r.technology) : null,
         routes,
@@ -2201,6 +2201,15 @@ export function CollectParamsSheet({
 
   const { data: bizeventData, isLoading: bizeventLoading, refetch } = useDql({ query: bizeventQuery });
 
+  // Keep the last fetch that returned records so a refresh that comes back
+  // empty (no new events yet) doesn't wipe the preview table.
+  const [lastGoodBizeventData, setLastGoodBizeventData] = useState<typeof bizeventData>(undefined);
+  useEffect(() => {
+    if (bizeventData?.records?.length) {
+      setLastGoodBizeventData(bizeventData);
+    }
+  }, [bizeventData]);
+
   const [discoveredSchemaId, setDiscoveredSchemaId] = useState<string | null>(null);
   const [triggerPath, setTriggerPath] = useState<string>(route);
 
@@ -2887,6 +2896,7 @@ export function CollectParamsSheet({
       setSampleIdx({});
       setSourceFilter(new Set<ParamSource>(["RequestBody", "ResponseBody", "QueryParameter", "RequestHeader"]));
       setBusinessOnly(false);
+      setLastGoodBizeventData(undefined);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [show]);
@@ -2976,7 +2986,10 @@ export function CollectParamsSheet({
   // (source, path) with sample values, observed JS type, and a business score
   // computed from the JSON path name.
   const params = useMemo((): ExtractedParam[] => {
-    if (!bizeventData?.records?.length) return [];
+    // Prefer live data; fall back to last known good data so a refresh that
+    // returns empty doesn't blank the preview while new events are on their way.
+    const effectiveData = bizeventData?.records?.length ? bizeventData : lastGoodBizeventData;
+    if (!effectiveData?.records?.length) return [];
 
     type Bucket = {
       source: ParamSource;
@@ -2987,7 +3000,7 @@ export function CollectParamsSheet({
     };
     const map = new Map<string, Bucket>();
 
-    for (const record of bizeventData.records) {
+    for (const record of effectiveData.records) {
       const rec = record as Record<string, unknown>;
       for (const [topKey, rawValue] of Object.entries(rec)) {
         const source = SOURCE_FOR_FIELD[topKey.toLowerCase()];
@@ -3052,7 +3065,7 @@ export function CollectParamsSheet({
         if (aNoisy !== bNoisy) return aNoisy - bNoisy;
         return b.score - a.score || b.occurrences - a.occurrences;
       });
-  }, [bizeventData]);
+  }, [bizeventData, lastGoodBizeventData]);
 
   // Append a single per-parameter capture FIELD to the parent rule (instead of
   // creating a new settings object). We PUT the parent rule with the new field
@@ -4279,7 +4292,9 @@ function settingsDeepLink(): string {
   // environment origin, so concatenating /ui/apps/dynatrace.settings/...
   // produces a clean absolute URL that the browser opens directly.
   const base = getEnvironmentUrl().replace(/\/+$/, "");
-  return `${base}/ui/apps/dynatrace.settings/settings/service-request-attributes`;
+  // The classic-settings URL works across all tenant types; the newer
+  // dynatrace.settings path is missing on some tenants.
+  return `${base}/ui/apps/dynatrace.classic.settings/#settings/requestattributes;gf=all`;
 }
 
 // React panel offering two paths to learn the method signature now that
@@ -6708,6 +6723,9 @@ function ServicesPanel({
 
 // ─── Summary Stats Bar ────────────────────────────────────────────────────────
 
+// (Request Attributes moved to its own page: ui/app/pages/RequestAttributes.tsx)
+// ─── Stats Bar ────────────────────────────────────────────────────────────────
+
 function StatsBar({
   services,
   endpointScan,
@@ -8878,6 +8896,7 @@ export const Discovery = () => {
           signalFilters={signalFilters}
         />
       )}
+
     </Flex>
   );
 };
