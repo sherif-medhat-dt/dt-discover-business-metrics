@@ -11,7 +11,7 @@ export const Header = () => {
           Discover Metrics
         </AppHeader.NavItem>
         <AppHeader.NavItem as={Link} to="/sessions">
-          Discovery Sessions
+          Business Events
         </AppHeader.NavItem>
         <AppHeader.NavItem as={Link} to="/request-attributes">
           Request Attributes

@@ -4,6 +4,7 @@ export interface RaSample {
   value: string;
   traceId: string;
   spanName: string;
+  httpMethod: string;
   timestamp: string;
 }
 
@@ -13,6 +14,7 @@ export interface RaRecord {
   dataType: string;
   samples: RaSample[];
   occurrences: number;
+  captureMethod: string;
 }
 
 export interface RequestAttributeResult {
@@ -29,12 +31,24 @@ function inferDataType(values: string[]): string {
   return "STRING";
 }
 
+function toHex(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "object") {
+    const obj = v as Record<string, unknown>;
+    if (typeof obj.value === "string") return obj.value;
+    if (typeof obj.hex === "string") return obj.hex;
+    if (typeof obj.id === "string") return obj.id;
+  }
+  return String(v);
+}
+
 export default async function (params?: { fromTime?: string }): Promise<RequestAttributeResult> {
   const fromTime = params?.fromTime ?? "now()-1h";
 
   const spanMap = new Map<
     string,
-    { samples: RaSample[]; valuesSet: Set<string>; count: number }
+    { samples: RaSample[]; valuesSet: Set<string>; count: number; captureMethod: string }
   >();
   let spansScanned = 0;
   let dqlError = "";
@@ -45,8 +59,24 @@ export default async function (params?: { fromTime?: string }): Promise<RequestA
         query: [
           `fetch spans, from:${fromTime}`,
           "| limit 10000",
+          // Lookup: for each span's trace, find the innermost business-code method span.
+          // A business method span has span.name == code.namespace.code.function (FQN),
+          // is internal kind, and has a dotted Java/package namespace.
+          "| lookup [",
+          `  fetch spans, from:${fromTime}`,
+          "  | filter span.kind == \"internal\"",
+          "    AND isNotNull(code.namespace) AND isNotNull(code.function)",
+          "    AND span.name == concat(code.namespace, \".\", code.function)",
+          "    AND contains(code.namespace, \".\")",
+          "    AND not(startsWith(code.namespace, \"org.springframework\"))",
+          "    AND not(startsWith(code.namespace, \"org.apache\"))",
+          "    AND not(startsWith(code.namespace, \"java.\"))",
+          "    AND not(startsWith(code.namespace, \"javax.\"))",
+          "    AND not(startsWith(code.namespace, \"sun.\"))",
+          "  | fields trace.id, code.namespace, code.function",
+          "], sourceField:trace.id, lookupField:trace.id, prefix:\"capture.\"",
         ].join("\n"),
-        requestTimeoutMilliseconds: 60000,
+        requestTimeoutMilliseconds: 25000,
         maxResultRecords: 10000,
       },
     });
@@ -55,19 +85,24 @@ export default async function (params?: { fromTime?: string }): Promise<RequestA
     spansScanned = spanRecords.length;
 
     for (const rec of spanRecords) {
-      const traceId = String(
-        rec["trace.id"] ?? rec["dt.trace_id"] ?? rec["traceId"] ?? ""
-      );
+      const traceId = toHex(rec["trace.id"] ?? rec["dt.trace_id"] ?? rec["traceId"] ?? "");
       const spanName = String(
-        rec["span.name"] ?? rec["name"] ?? rec["http.target"] ?? rec["db.statement"] ?? ""
+        rec["span.name"] ?? rec["endpoint.name"] ?? rec["http.target"] ?? rec["name"] ?? ""
       );
+      const httpMethod = String(rec["http.method"] ?? rec["http.request.method"] ?? "");
       const timestamp = rec["timestamp"] ? String(rec["timestamp"]) : "";
 
+      // captureMethod comes from the lookup — the inner business method span for this trace.
+      const captureNs = String(rec["capture.code.namespace"] ?? "");
+      const captureFn = String(rec["capture.code.function"] ?? "");
+      const captureMethod = captureNs && captureFn ? `${captureNs}.${captureFn}` : captureNs || captureFn;
+
       for (const [k, v] of Object.entries(rec)) {
-        const isRa = k.startsWith("request_attribute.") || k.startsWith("dt.request_attribute.");
+        const isDtRa = k.startsWith("dt.request_attribute.");
+        const isRa = isDtRa || k.startsWith("request_attribute.");
         if (!isRa || v === null || v === undefined || v === "") continue;
 
-        const name = k.startsWith("dt.request_attribute.")
+        const name = isDtRa
           ? k.slice("dt.request_attribute.".length)
           : k.slice("request_attribute.".length);
 
@@ -75,13 +110,17 @@ export default async function (params?: { fromTime?: string }): Promise<RequestA
           samples: [],
           valuesSet: new Set<string>(),
           count: 0,
+          captureMethod: "",
         };
         entry.count++;
 
+        if (!entry.captureMethod && captureMethod) {
+          entry.captureMethod = captureMethod;
+        }
+
         const strVal = String(v).slice(0, 120);
-        // Keep up to 5 samples (prefer distinct values first)
         if (entry.samples.length < 5) {
-          entry.samples.push({ value: strVal, traceId, spanName, timestamp });
+          entry.samples.push({ value: strVal, traceId, spanName, httpMethod, timestamp });
         }
         entry.valuesSet.add(strVal);
         spanMap.set(name, entry);
@@ -97,9 +136,9 @@ export default async function (params?: { fromTime?: string }): Promise<RequestA
     dataType: inferDataType(Array.from(entry.valuesSet)),
     samples: entry.samples,
     occurrences: entry.count,
+    captureMethod: entry.captureMethod,
   }));
 
-  // Sort by occurrences descending
   records.sort((a, b) => b.occurrences - a.occurrences);
 
   const debugInfo = `spansScanned=${spansScanned} | raFound=${records.length} | fromTime=${fromTime}${dqlError ? " | dqlError=" + dqlError : ""}`;

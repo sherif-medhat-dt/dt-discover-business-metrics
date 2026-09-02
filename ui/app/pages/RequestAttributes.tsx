@@ -2,7 +2,6 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useAppFunction } from "@dynatrace-sdk/react-hooks";
 import { getEnvironmentUrl } from "@dynatrace-sdk/app-environment";
 import { Flex } from "@dynatrace/strato-components/layouts";
-import { Surface } from "@dynatrace/strato-components/layouts";
 import { Heading, Paragraph, Text, Strong } from "@dynatrace/strato-components/typography";
 import { DataTable, type DataTableColumnDef } from "@dynatrace/strato-components/tables";
 import { Chip } from "@dynatrace/strato-components/content";
@@ -10,12 +9,13 @@ import { Button } from "@dynatrace/strato-components/buttons";
 import { Modal } from "@dynatrace/strato-components/overlays";
 import { Select, SelectOption, SelectContent } from "@dynatrace/strato-components-preview/forms";
 import Colors from "@dynatrace/strato-design-tokens/colors";
-import { CriticalIcon } from "@dynatrace/strato-icons";
+import { CriticalIcon, ExternalLinkIcon, CopyIcon } from "@dynatrace/strato-icons";
 
 interface RaSample {
   value: string;
   traceId: string;
   spanName: string;
+  httpMethod: string;
   timestamp: string;
 }
 
@@ -25,6 +25,7 @@ interface RaRecord {
   dataType: string;
   samples: RaSample[];
   occurrences: number;
+  captureMethod: string;
 }
 
 interface RequestAttributeResult {
@@ -40,25 +41,128 @@ const INTERVAL_OPTIONS = [
   { label: "Last 3 Days", value: "now()-3d" },
 ];
 
-function buildTraceUrl(traceId: string): string {
-  if (!traceId) return "";
-  const base = getEnvironmentUrl().replace(/\/+$/, "");
-  return `${base}/ui/apps/dynatrace.classic.distributed.tracing/#uai=all;gf=all;traceId=${traceId}`;
+function buildSettingsUrl(env: string): string {
+  return `${env}/ui/apps/dynatrace.classic.settings/#settings/requestattributes;gf=all`;
 }
+
+function buildTraceUrl(traceId: string, env: string, timestamp?: string): string {
+  if (!traceId || traceId === "[object Object]") return "";
+  const clean = traceId.replace(/[^0-9a-fA-F]/g, "");
+  if (clean.length < 16) return "";
+  // Normalize timestamp to ISO string for the `tt` param
+  let tt = "";
+  if (timestamp) {
+    try {
+      const d = new Date(isNaN(Number(timestamp)) ? timestamp : Number(timestamp) / 1_000_000);
+      if (!isNaN(d.getTime())) tt = d.toISOString();
+    } catch { /* ignore */ }
+  }
+  const ttPart = tt ? `&tt=${encodeURIComponent(tt)}` : "";
+  return `${env}/ui/apps/dynatrace.distributedtracing/explorer?tf=now-24h%3Bnow&cv=false&traceId=${clean}${ttPart}&m=true`;
+}
+
+// ─── Recent Values Carousel (same pattern as Discovery live preview) ──────────
+
+const ValuesCarousel: React.FC<{ samples: RaSample[] }> = ({ samples }) => {
+  const [idx, setIdx] = useState(0);
+
+  const latest3 = useMemo(() => samples.slice(0, 3).map((s) => s.value), [samples]);
+
+  if (latest3.length === 0) {
+    return <Text style={{ color: Colors.Text.Neutral.Default }}>—</Text>;
+  }
+
+  const safeIdx = Math.min(idx, latest3.length - 1);
+  const value = latest3[safeIdx];
+
+  return (
+    <Flex
+      gap={4}
+      alignItems="center"
+      style={{
+        border: `1px solid ${Colors.Border.Neutral.Default}`,
+        borderRadius: 4,
+        padding: "2px 4px",
+        background: Colors.Background.Container.Neutral.Default,
+        width: "fit-content",
+      }}
+    >
+      {latest3.length > 1 && (
+        <Button variant="default" onClick={() => setIdx((i) => (i - 1 + latest3.length) % latest3.length)}>
+          ‹
+        </Button>
+      )}
+      <Chip color="primary" style={{ fontFamily: "monospace", fontSize: "11px", maxWidth: 200 }} title={value}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>
+          {value.length > 28 ? `${value.slice(0, 28)}…` : value}
+        </span>
+      </Chip>
+      {latest3.length > 1 && (
+        <>
+          <Text style={{ color: Colors.Text.Neutral.Default, fontSize: "11px", minWidth: 36, textAlign: "center" }}>
+            {safeIdx + 1}/{latest3.length}
+          </Text>
+          <Button variant="default" onClick={() => setIdx((i) => (i + 1) % latest3.length)}>
+            ›
+          </Button>
+        </>
+      )}
+    </Flex>
+  );
+};
+
+// ─── Copy button ──────────────────────────────────────────────────────────────
+
+const CopyButton: React.FC<{ text: string }> = ({ text }) => {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      title="Copy trace ID"
+      onClick={() => {
+        void navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      style={{
+        border: "none",
+        background: "none",
+        cursor: "pointer",
+        padding: "0 2px",
+        display: "flex",
+        alignItems: "center",
+        color: copied ? Colors.Text.Primary.Default : Colors.Text.Neutral.Default,
+      }}
+    >
+      <CopyIcon style={{ width: 14, height: 14 }} />
+    </button>
+  );
+};
+
+// ─── Capture Method display — splits FQN into muted package + bold Class.method ─
+
+const CaptureMethodDisplay: React.FC<{ fqn: string }> = ({ fqn }) => {
+  const parts = fqn.split(".");
+  const methodPart = parts.slice(-2).join(".");
+  const packagePart = parts.slice(0, -2).join(".");
+  return (
+    <Text style={{ fontSize: "13px", fontFamily: "monospace", wordBreak: "break-all" }}>
+      {packagePart && (
+        <span style={{ color: Colors.Text.Neutral.Default }}>{packagePart}.</span>
+      )}
+      <span style={{ color: "#9b59b6", fontWeight: 700 }}>{methodPart}</span>
+    </Text>
+  );
+};
 
 // ─── Traces Modal ─────────────────────────────────────────────────────────────
 
-function TracesModal({
-  ra,
-  show,
-  onClose,
-  intervalLabel,
-}: {
+const TracesModal: React.FC<{
   ra: RaRecord | null;
   show: boolean;
   onClose: () => void;
   intervalLabel: string;
-}) {
+  env: string;
+}> = ({ ra, show, onClose, intervalLabel, env }) => {
   if (!ra) return null;
 
   return (
@@ -66,62 +170,95 @@ function TracesModal({
       show={show}
       title={`Traces capturing "${ra.name}" — ${intervalLabel}`}
       onDismiss={onClose}
-      size="large"
-      footer={
-        <Button variant="emphasized" onClick={onClose}>
-          Close
-        </Button>
-      }
+      size="medium"
+      footer={<Button variant="emphasized" onClick={onClose}>Close</Button>}
     >
       <Flex flexDirection="column" gap={8} padding={4}>
-        {ra.samples.length === 0 ? (
-          <Text style={{ color: Colors.Text.Neutral.Default }}>No trace samples available.</Text>
-        ) : (
-          <Flex flexDirection="column" gap={6}>
-            {ra.samples.map((s, i) => (
-              <Surface key={i}>
-                <Flex padding={12} gap={12} alignItems="center" flexWrap="wrap">
-                  <Chip
-                    color="primary"
-                    style={{ fontFamily: "monospace", fontSize: "12px", minWidth: 80 }}
-                  >
-                    {s.value}
-                  </Chip>
-                  <Flex flexDirection="column" gap={2} style={{ flex: 1, minWidth: 160 }}>
-                    {s.spanName && (
-                      <Text style={{ fontSize: "12px", color: Colors.Text.Neutral.Default }}>
-                        {s.spanName}
-                      </Text>
-                    )}
-                    {s.timestamp && (
-                      <Text style={{ fontSize: "11px", color: Colors.Text.Neutral.Default }}>
-                        {new Date(s.timestamp).toLocaleString()}
-                      </Text>
-                    )}
-                  </Flex>
-                  {s.traceId ? (
-                    <a
-                      href={buildTraceUrl(s.traceId)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ fontSize: "12px", fontFamily: "monospace", color: Colors.Text.Primary.Default }}
-                    >
-                      {s.traceId}
-                    </a>
-                  ) : (
-                    <Text style={{ fontSize: "12px", color: Colors.Text.Neutral.Default }}>
-                      No trace ID
-                    </Text>
-                  )}
-                </Flex>
-              </Surface>
-            ))}
+        {ra.captureMethod && (
+          <Flex flexDirection="column" gap={4}>
+            <Strong style={{ fontSize: "11px", color: Colors.Text.Neutral.Default }}>Capture Method</Strong>
+            <CaptureMethodDisplay fqn={ra.captureMethod} />
           </Flex>
         )}
+        <Text style={{ fontSize: "12px", color: Colors.Text.Neutral.Default }}>
+          Showing {ra.samples.length} sample trace{ra.samples.length !== 1 ? "s" : ""}
+          {ra.occurrences > ra.samples.length ? ` of ${ra.occurrences.toLocaleString()} total captures` : ""}
+        </Text>
+        <Flex flexDirection="column" gap={12} style={{ marginTop: 8 }}>
+          {ra.samples.length === 0 ? (
+            <Text style={{ color: Colors.Text.Neutral.Default }}>No trace samples available.</Text>
+          ) : (
+            ra.samples.map((s, i) => {
+              const traceUrl = buildTraceUrl(s.traceId, env, s.timestamp);
+              return (
+                <Flex
+                  key={i}
+                  flexDirection="column"
+                  gap={12}
+                  padding={16}
+                  style={{
+                    border: `1px solid ${Colors.Border.Neutral.Default}`,
+                    borderRadius: 6,
+                    background: Colors.Background.Container.Neutral.Default,
+                  }}
+                >
+                  {/* Value */}
+                  <Flex flexDirection="column" gap={4}>
+                    <Strong style={{ fontSize: "11px", color: Colors.Text.Neutral.Default }}>Value</Strong>
+                    <Flex gap={6} alignItems="center">
+                      <Chip color="primary" style={{ fontFamily: "monospace", fontSize: "13px" }}>
+                        {s.value}
+                      </Chip>
+                      {s.timestamp && (
+                        <Text style={{ fontSize: "11px", color: Colors.Text.Neutral.Default }}>
+                          {new Date(s.timestamp).toLocaleString()}
+                        </Text>
+                      )}
+                    </Flex>
+                  </Flex>
+
+                  {/* Endpoint */}
+                  {s.spanName && (
+                    <Flex flexDirection="column" gap={4}>
+                      <Strong style={{ fontSize: "11px", color: Colors.Text.Neutral.Default }}>Endpoint</Strong>
+                      <Text style={{ fontSize: "13px" }}>{s.spanName}</Text>
+                    </Flex>
+                  )}
+
+                  {/* Trace ID */}
+                  <Flex flexDirection="column" gap={6}>
+                    <Strong style={{ fontSize: "11px", color: Colors.Text.Neutral.Default }}>Trace ID</Strong>
+                    <Flex gap={6} alignItems="center">
+                      <Text style={{ fontSize: "12px", fontFamily: "monospace", wordBreak: "break-all" }}>
+                        {s.traceId || "—"}
+                      </Text>
+                      {s.traceId && <CopyButton text={s.traceId} />}
+                    </Flex>
+                    {traceUrl ? (
+                      <Button
+                        as="a"
+                        href={traceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        variant="emphasized"
+                        style={{ alignSelf: "flex-start" }}
+                      >
+                        Open in Distributed Tracing
+                        <Button.Suffix><ExternalLinkIcon /></Button.Suffix>
+                      </Button>
+                    ) : (
+                      <Text style={{ fontSize: "11px", color: Colors.Text.Neutral.Default }}>No trace ID available</Text>
+                    )}
+                  </Flex>
+                </Flex>
+              );
+            })
+          )}
+        </Flex>
       </Flex>
     </Modal>
   );
-}
+};
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
@@ -129,20 +266,16 @@ export const RequestAttributes = () => {
   const [selectedInterval, setSelectedInterval] = useState("now()-1h");
   const [selectedRa, setSelectedRa] = useState<RaRecord | null>(null);
 
-  // Stable data object — only a new reference when the value actually changes
+  const env = useMemo(() => getEnvironmentUrl().replace(/\/+$/, ""), []);
+  const settingsUrl = buildSettingsUrl(env);
+
   const fnData = useMemo(() => ({ fromTime: selectedInterval }), [selectedInterval]);
 
-  const {
-    data: raResult,
-    isLoading,
-    error,
-    refetch,
-  } = useAppFunction<RequestAttributeResult>({
+  const { data: raResult, isLoading, error, refetch } = useAppFunction<RequestAttributeResult>({
     name: "getRequestAttributes",
     data: fnData,
   });
 
-  // Re-fetch whenever the interval changes (in case autoFetchOnUpdate doesn't fire)
   const prevInterval = useRef(selectedInterval);
   useEffect(() => {
     if (prevInterval.current !== selectedInterval) {
@@ -153,19 +286,29 @@ export const RequestAttributes = () => {
 
   const ras: RaRecord[] = raResult?.records ?? [];
   const debugInfo = raResult?.debug;
-
-  const intervalLabel =
-    INTERVAL_OPTIONS.find((o) => o.value === selectedInterval)?.label ?? selectedInterval;
+  const intervalLabel = INTERVAL_OPTIONS.find((o) => o.value === selectedInterval)?.label ?? selectedInterval;
 
   const columns = useMemo<DataTableColumnDef<RaRecord>[]>(
     () => [
       {
         id: "name",
-        header: "Attribute Name",
+        header: "Attribute",
         accessor: "name",
+        width: 260,
         cell: ({ value, rowData }: { value: string; rowData: RaRecord }) => (
-          <Flex flexDirection="column" gap={2} style={{ minHeight: 36, justifyContent: "center" }}>
-            <Strong style={{ fontSize: "13px" }}>{value}</Strong>
+          <Flex flexDirection="column" gap={4} style={{ minHeight: 40, justifyContent: "center" }}>
+            <Flex gap={6} alignItems="center">
+              <Strong style={{ fontSize: "13px" }}>{value}</Strong>
+              <a
+                href={settingsUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+                title="Open Request Attributes settings"
+                style={{ color: Colors.Text.Neutral.Default, display: "flex", alignItems: "center" }}
+              >
+                <ExternalLinkIcon style={{ width: 12, height: 12 }} />
+              </a>
+            </Flex>
             <Chip color="neutral" style={{ fontSize: "11px", width: "fit-content" }}>
               {rowData.dataType}
             </Chip>
@@ -176,44 +319,25 @@ export const RequestAttributes = () => {
         id: "occurrences",
         header: "Captures",
         accessor: "occurrences",
+        width: 110,
         cell: ({ value }: { value: unknown }) => (
           <Text style={{ fontSize: "13px" }}>{(value as number).toLocaleString()}</Text>
         ),
       },
       {
         id: "recentValues",
-        header: "Recent Values",
+        header: "Last 3 Sample Values",
         accessor: "samples",
-        cell: ({ value }: { value: unknown }) => {
-          const samples = value as RaSample[];
-          // Show up to 3 distinct values
-          const distinct: string[] = [];
-          for (const s of samples) {
-            if (!distinct.includes(s.value)) distinct.push(s.value);
-            if (distinct.length >= 3) break;
-          }
-          if (distinct.length === 0) {
-            return <Text style={{ color: Colors.Text.Neutral.Default, fontSize: "12px" }}>—</Text>;
-          }
-          return (
-            <Flex gap={4} flexWrap="wrap">
-              {distinct.map((v, i) => (
-                <Chip
-                  key={i}
-                  color="primary"
-                  style={{ fontFamily: "monospace", fontSize: "11px" }}
-                >
-                  {v.length > 28 ? `${v.slice(0, 28)}…` : v}
-                </Chip>
-              ))}
-            </Flex>
-          );
-        },
+        width: 340,
+        cell: ({ value }: { value: unknown }) => (
+          <ValuesCarousel samples={value as RaSample[]} />
+        ),
       },
       {
         id: "traces",
         header: "",
         accessor: "id",
+        width: 150,
         cell: ({ rowData }: { value: unknown; rowData: RaRecord }) => (
           <Button variant="default" onClick={() => setSelectedRa(rowData)}>
             View Traces
@@ -221,131 +345,76 @@ export const RequestAttributes = () => {
         ),
       },
     ],
-    [],
+    [settingsUrl],
   );
 
   const errorMessage = error?.message;
 
   return (
-    <Flex flexDirection="column" gap={16} padding={16}>
-      {/* Header row */}
-      <Flex gap={12} alignItems="flex-start" justifyContent="space-between" flexWrap="wrap">
-        <Flex flexDirection="column" gap={4}>
-          <Heading level={2}>Request Attributes</Heading>
-          <Text style={{ color: Colors.Text.Neutral.Default }}>
-            {isLoading
-              ? `Scanning spans for ${intervalLabel}…`
-              : errorMessage
-              ? "Failed to load"
-              : ras.length === 0
-              ? `No request attributes captured in ${intervalLabel}`
-              : `${ras.length} request attribute${ras.length !== 1 ? "s" : ""} that captured data in ${intervalLabel}`}
-          </Text>
-        </Flex>
-        <Flex gap={8} alignItems="center">
-          <Text style={{ fontSize: "13px", color: Colors.Text.Neutral.Default }}>Interval:</Text>
-          <Select
-            value={selectedInterval}
-            onChange={(val) => {
-              if (val) setSelectedInterval(val as string);
-            }}
-            style={{ minWidth: 150 }}
-          >
-            <SelectContent>
-              {INTERVAL_OPTIONS.map((opt) => (
-                <SelectOption key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectOption>
-              ))}
-            </SelectContent>
-          </Select>
-          {!isLoading && (
-            <Button variant="default" onClick={() => void refetch()}>
-              Refresh
-            </Button>
-          )}
-        </Flex>
+    <Flex flexDirection="column" gap={16} padding={32}>
+      <Flex flexDirection="column" gap={8}>
+        <Heading level={2}>Request Attributes</Heading>
+        <Paragraph>
+          Request attributes that captured data in the selected time interval, discovered by
+          scanning distributed trace spans. Only attributes with observed values appear here —
+          widen the interval if you expect to see more.
+        </Paragraph>
       </Flex>
 
-      {/* Explanatory banner */}
-      <Surface style={{ background: "rgba(55, 130, 245, 0.08)", borderLeft: "3px solid #3782F5" }}>
-        <Flex padding={16} gap={12} alignItems="flex-start">
-          <Flex flexDirection="column" gap={4}>
-            <Strong style={{ fontSize: "13px" }}>How this works</Strong>
-            <Text style={{ fontSize: "12px", color: Colors.Text.Neutral.Default, lineHeight: "1.5" }}>
-              This page scans distributed trace spans to discover request attributes that actively
-              captured data in the selected time interval. Only attributes with at least one recorded
-              value will appear here.{" "}
-              <Strong style={{ fontSize: "12px" }}>
-                If an attribute is configured but has no recent traffic, it will not show up.
-              </Strong>{" "}
-              Widen the interval to search further back in time.
-            </Text>
-          </Flex>
-        </Flex>
-      </Surface>
+      <Flex gap={8} alignItems="center" flexWrap="wrap">
+        <Text style={{ fontSize: "13px", color: Colors.Text.Neutral.Default }}>Interval:</Text>
+        <Select
+          value={selectedInterval}
+          onChange={(val) => { if (val) setSelectedInterval(val as string); }}
+          style={{ minWidth: 150 }}
+        >
+          <SelectContent>
+            {INTERVAL_OPTIONS.map((opt) => (
+              <SelectOption key={opt.value} value={opt.value}>{opt.label}</SelectOption>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button variant="default" onClick={() => void refetch()} disabled={isLoading}>
+          {isLoading ? "Scanning…" : "Refresh"}
+        </Button>
+        {!isLoading && (
+          <Text style={{ color: Colors.Text.Neutral.Default }}>
+            {ras.length > 0
+              ? `${ras.length} attribute${ras.length !== 1 ? "s" : ""} captured data in ${intervalLabel}`
+              : !errorMessage ? `No captured data found in ${intervalLabel}` : ""}
+          </Text>
+        )}
+      </Flex>
 
-      {/* Content */}
-      {isLoading ? (
-        <Surface>
-          <Flex padding={48} justifyContent="center" alignItems="center">
-            <Text style={{ color: Colors.Text.Neutral.Default }}>
-              Scanning spans for captured request attribute values…
-            </Text>
-          </Flex>
-        </Surface>
-      ) : errorMessage ? (
-        <Surface>
-          <Flex padding={32} flexDirection="column" gap={8} alignItems="center">
-            <CriticalIcon style={{ color: Colors.Text.Critical.Default }} />
-            <Text style={{ color: Colors.Text.Critical.Default }}>{errorMessage}</Text>
-            <Button variant="default" onClick={() => void refetch()}>
-              Retry
-            </Button>
-          </Flex>
-        </Surface>
-      ) : ras.length === 0 ? (
-        <Surface>
-          <Flex
-            padding={48}
-            flexDirection="column"
-            alignItems="center"
-            justifyContent="center"
-            gap={12}
-          >
-            <Heading level={3}>No Captured Data Found</Heading>
-            <Paragraph
-              style={{ color: Colors.Text.Neutral.Default, textAlign: "center", maxWidth: 440 }}
-            >
-              No request attributes were observed in spans during {intervalLabel}. Try a wider
-              interval, or confirm that the services are receiving traffic and capture rules are
-              enabled.
-            </Paragraph>
-            {debugInfo && (
-              <Text
-                style={{
-                  color: Colors.Text.Neutral.Default,
-                  fontSize: "11px",
-                  fontFamily: "monospace",
-                  marginTop: 4,
-                }}
-              >
-                {debugInfo}
-              </Text>
-            )}
-          </Flex>
-        </Surface>
-      ) : (
-        <Surface>
-          <DataTable data={ras} columns={columns} lineWrap={false} />
-        </Surface>
+      {errorMessage && (
+        <Flex alignItems="center" gap={8} style={{ color: Colors.Text.Critical.Default }}>
+          <CriticalIcon />
+          <Paragraph>{errorMessage}</Paragraph>
+        </Flex>
       )}
+
+      {!isLoading && !errorMessage && ras.length === 0 && (
+        <Flex flexDirection="column" gap={4}>
+          <Paragraph style={{ color: Colors.Text.Neutral.Default }}>
+            No request attributes with captured values found in {intervalLabel}. Try a wider
+            interval, or confirm that services are receiving traffic and capture rules are enabled.
+          </Paragraph>
+          {debugInfo && (
+            <Text style={{ color: Colors.Text.Neutral.Default, fontSize: "11px", fontFamily: "monospace" }}>
+              {debugInfo}
+            </Text>
+          )}
+        </Flex>
+      )}
+
+      {ras.length > 0 && <DataTable data={ras} columns={columns} lineWrap={false} />}
 
       <TracesModal
         ra={selectedRa}
         show={selectedRa !== null}
         onClose={() => setSelectedRa(null)}
         intervalLabel={intervalLabel}
+        env={env}
       />
     </Flex>
   );

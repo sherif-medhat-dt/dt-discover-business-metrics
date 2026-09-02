@@ -1,9 +1,9 @@
 {
   "$schema": "./.dt-app/app.config.schema.json",
-  "environmentUrl": "https://krh86692.apps.dynatrace.com/",
+  "environmentUrl": "https://qmh1718h.sprint.apps.dynatracelabs.com/",
   "app": {
     "name": "Business Metrics Discovery",
-    "version": "0.0.245",
+    "version": "0.0.270",
     "description": "A starting project with routing, fetching data, and charting",
     "id": "my.dt.discover.business.metrics",
     "scopes": [

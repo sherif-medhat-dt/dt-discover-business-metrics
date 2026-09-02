@@ -43,7 +43,7 @@
     "@types/node": "^24.7.0",
     "@types/react": "^18.3.20",
     "@types/react-dom": "^18.3.5",
-    "dt-app": "1.10.1",
+    "dt-app": "^1.16.1",
     "eslint": "^9.37.0",
     "eslint-plugin-n": "17.23.1",
     "eslint-plugin-no-secrets": "^2.2.1",

@@ -9,7 +9,7 @@ A Dynatrace App that helps you find and instrument business-relevant data alread
 - [Overview](#overview)
 - [Pages](#pages)
   - [Discover](#discover)
-  - [Open Sessions](#open-sessions)
+  - [Business Events](#open-sessions)
   - [Request Attributes Tab](#request-attributes-tab)
   - [Journey Dashboard Wizard](#journey-dashboard-wizard)
 - [Business Events](#business-events)
@@ -80,7 +80,7 @@ The **cross-service descendants** toggle (also in the Collect Parameters sheet) 
 
 ---
 
-### Open Sessions
+### Business Events
 
 Shows every `builtin:bizevents.http.incoming` rule created by this app (identified by the `dt-business-discovery.*` source prefix). There are two views:
 
@@ -122,17 +122,23 @@ The **Request Attributes** page discovers Dynatrace Request Attributes that are 
 
 #### How it works
 
-The page calls the `getRequestAttributes` backend function, which scans up to 10,000 spans from the selected interval using DQL (`fetch spans | limit 10000`). It iterates every field on every span looking for keys prefixed with `request_attribute.*` or `dt.request_attribute.*`. Each matching key is aggregated across all spans, collecting:
+The page calls the `getRequestAttributes` backend function, which executes a single DQL query that:
 
-- **Occurrence count** — how many times the attribute was captured.
-- **Up to 5 sample values** — the raw captured values, along with the trace ID and span name for each.
-- **Inferred data type** — `STRING`, `DOUBLE`, or `BOOLEAN` based on the sample values.
+1. Fetches up to 10,000 spans from the selected interval.
+2. Uses a DQL `lookup` to join each span's trace with its innermost business-code method span — identified by the rule `span.name == concat(code.namespace, ".", code.function)` (true only for Dynatrace OneAgent-named Java/.NET method spans).
+3. Iterates every field on every span looking for keys prefixed with `request_attribute.*`. Each matching key is aggregated, collecting:
+   - **Occurrence count** — how many times the attribute was captured.
+   - **Up to 5 sample values** — the raw captured values, along with the trace ID and endpoint name for each.
+   - **Capture method** — the fully qualified Java/.NET class and method from which the RA value was extracted (e.g. `com.example.PaymentService.processPayment`), resolved via the lookup.
+   - **Inferred data type** — `STRING`, `DOUBLE`, or `BOOLEAN` based on the sample values.
 
-> **Why no sort?** Scanning without `sort timestamp desc` ensures the 10,000-span window is distributed broadly across the interval rather than just the most recent spans. This makes the scan more likely to find infrequently captured attributes.
+#### Capture Method resolution
+
+The RA value in DQL is stored on the outermost HTTP entry span (not on the inner Java method span), and propagates to all ancestor spans in the same trace. To reliably find the *actual* capture point, the backend uses a DQL lookup that finds spans in the same trace where `span.name == concat(code.namespace, ".", code.function)` — a signature unique to Dynatrace OneAgent-instrumented internal method spans. Framework spans (Spring filters, Apache HTTP internals, etc.) are excluded because their span names follow HTTP URL patterns, not the FQN pattern. The first matching business-code method found per RA is used.
 
 #### Interval selector
 
-A dropdown in the top-right controls how far back to scan:
+A dropdown controls how far back to scan:
 
 | Option | DQL expression |
 |--------|---------------|
@@ -147,25 +153,26 @@ Changing the interval triggers an automatic re-fetch. A **Refresh** button is al
 
 | Column | Description |
 |--------|-------------|
-| Attribute Name | The request attribute name, with its inferred data type as a chip |
+| Attribute | The request attribute name with inferred data type chip, and a link to Request Attribute Settings |
 | Captures | Total number of spans in the interval that carried this attribute |
-| Recent Values | Up to 3 distinct captured values, shown as monospace chips |
-| View Traces | Opens a modal with up to 5 sample traces |
+| Last 3 Sample Values | Carousel of the 3 most recent captured values (use `‹` / `›` to navigate) |
+| View Traces | Opens the traces modal |
 
 #### View Traces modal
 
-Clicking **View Traces** for an attribute opens a modal that lists the sample spans where the attribute was captured. Each entry shows:
+Clicking **View Traces** for an attribute opens a modal showing:
 
-- The captured **value** (monospace chip).
-- The **span/endpoint name** where it was found.
-- The **timestamp** of the span.
-- A **clickable trace ID** that deep-links into Dynatrace Distributed Tracing for full end-to-end trace inspection.
+- **Capture Method** — the fully qualified Java/.NET method where the RA is configured to capture, displayed as `package.ClassName.methodName` with the class and method highlighted in bold purple.
+- **Sample trace cards** (up to 5), each showing:
+  - **Value** — the captured value chip with timestamp.
+  - **Endpoint** — the HTTP span name where the request entered the service.
+  - **Trace ID** — full hex ID with a copy button and an **Open in Distributed Tracing** button that deep-links directly into the Dynatrace trace explorer.
 
 #### Limitations
 
 - Only attributes with traffic in the selected interval appear. Configured-but-idle attributes are invisible.
 - The scan is capped at 10,000 spans per query. For high-volume environments, infrequent attributes may not appear — widen the interval to increase coverage.
-- The `getRequestAttributes` function cannot call the Dynatrace Config v1 API (which lists all configured attributes) because App Functions run in an AppEngine sandbox that does not expose the tenant's `live.dynatrace.com` API. The spans-based approach is the only viable discovery mechanism.
+- If no internal method span matching the FQN pattern exists in the scanned traces for a given RA, the Capture Method field will be blank in the modal.
 
 ---
 
