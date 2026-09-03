@@ -122,19 +122,23 @@ The **Request Attributes** page discovers Dynatrace Request Attributes that are 
 
 #### How it works
 
-The page calls the `getRequestAttributes` backend function, which executes a single DQL query that:
+The page calls the `getRequestAttributes` backend function, which runs two parallel DQL queries and joins the results in memory:
 
-1. Fetches up to 10,000 spans from the selected interval.
-2. Uses a DQL `lookup` to join each span's trace with its innermost business-code method span — identified by the rule `span.name == concat(code.namespace, ".", code.function)` (true only for Dynatrace OneAgent-named Java/.NET method spans).
-3. Iterates every field on every span looking for keys prefixed with `request_attribute.*`. Each matching key is aggregated, collecting:
-   - **Occurrence count** — how many times the attribute was captured.
-   - **Up to 5 sample values** — the raw captured values, along with the trace ID and endpoint name for each.
-   - **Capture method** — the fully qualified Java/.NET class and method from which the RA value was extracted (e.g. `com.example.PaymentService.processPayment`), resolved via the lookup.
-   - **Inferred data type** — `STRING`, `DOUBLE`, or `BOOLEAN` based on the sample values.
+**Query 1 — RA discovery** scans up to 200,000 server spans from the selected interval (all RA values are attached to `span.kind == "server"` spans). For each span it iterates every field looking for keys prefixed with `request_attribute.*`. Each matching key is aggregated, collecting:
+- **Occurrence count** — how many times the attribute was captured.
+- **Up to 5 sample values** — the raw captured values, along with the trace ID and endpoint name for each.
+- **Inferred data type** — `STRING`, `DOUBLE`, or `BOOLEAN` based on the sample values.
+- **Trace IDs** — kept for the in-memory join with Query 2.
+
+**Query 2 — Capture method resolution** independently fetches up to 100,000 internal method spans where `span.name == concat(code.namespace, ".", code.function)` — a pattern unique to Dynatrace OneAgent-instrumented Java/.NET spans. Framework spans (Spring filters, Apache HTTP internals, etc.) are excluded. The result is a `traceId → FQN` map.
+
+The two results are then joined in TypeScript by trace ID: for each discovered RA the first matching business method span from the same trace is used as the **capture method**.
+
+Separating the queries removes the expensive server-side DQL `lookup` join, keeping both queries fast and avoiding backend function timeouts.
 
 #### Capture Method resolution
 
-The RA value in DQL is stored on the outermost HTTP entry span (not on the inner Java method span), and propagates to all ancestor spans in the same trace. To reliably find the *actual* capture point, the backend uses a DQL lookup that finds spans in the same trace where `span.name == concat(code.namespace, ".", code.function)` — a signature unique to Dynatrace OneAgent-instrumented internal method spans. Framework spans (Spring filters, Apache HTTP internals, etc.) are excluded because their span names follow HTTP URL patterns, not the FQN pattern. The first matching business-code method found per RA is used.
+The RA value in DQL is stored on the outermost HTTP entry span (not on the inner Java method span), and propagates to all ancestor spans in the same trace. To reliably find the *actual* capture point, Query 2 finds spans where `span.name == concat(code.namespace, ".", code.function)` — true only for OneAgent-named internal method spans. Framework spans (Spring filters, Apache HTTP internals, etc.) are excluded because their span names follow URL patterns, not FQN patterns. The first matching business-code method found for any trace ID shared with an RA span is used.
 
 #### Interval selector
 
@@ -171,7 +175,7 @@ Clicking **View Traces** for an attribute opens a modal showing:
 #### Limitations
 
 - Only attributes with traffic in the selected interval appear. Configured-but-idle attributes are invisible.
-- The scan is capped at 10,000 spans per query. For high-volume environments, infrequent attributes may not appear — widen the interval to increase coverage.
+- Query 1 scans up to 200,000 server spans; Query 2 scans up to 100,000 internal method spans. For high-volume environments, infrequent attributes may not appear — widen the interval to increase coverage.
 - If no internal method span matching the FQN pattern exists in the scanned traces for a given RA, the Capture Method field will be blank in the modal.
 
 ---
