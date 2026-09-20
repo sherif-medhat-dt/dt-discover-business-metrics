@@ -50,10 +50,6 @@
       {
         "name": "document:documents:read",
         "comment": "verify created dashboard documents"
-      },
-      {
-        "name": "ReadConfig",
-        "comment": "read v1 Config API for request attributes list"
       }
     ]
   }
